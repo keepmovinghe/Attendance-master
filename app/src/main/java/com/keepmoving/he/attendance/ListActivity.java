@@ -37,10 +37,12 @@ public class ListActivity extends android.app.ListActivity {
         WifiManager wifiManager = (WifiManager)getSystemService(Context.WIFI_SERVICE);
         WifiInfo wifiInfo = wifiManager.getConnectionInfo();
         int ipAddress = wifiInfo.getIpAddress();
+        String serverIp = intToIp(wifiManager.getDhcpInfo().serverAddress);
         // 数据库实例
         DatabaseHelper dbh = new DatabaseHelper(ListActivity.this,"SamG_Checkin");
         SQLiteDatabase sd = dbh.getReadableDatabase();
-        Cursor cursor=sd.query("CheckinTable", new String[]{"name","number"}, "link_flag=?", new String[]{String.valueOf(ipAddress)}, null, null, null);
+        //Cursor cursor=sd.query("CheckinTable", new String[]{"name","number"}, "link_flag=?", new String[]{intToIp(ipAddress)}, null, null, null);
+        Cursor cursor=sd.query("CheckinTable", new String[]{"name","number"}, null,null, null, null, null);
         final ArrayList<HashMap<String,String>> list = new ArrayList<HashMap<String,String>>();
         final HashMap<String,String> titleMap = new HashMap<String,String>();
         titleMap.put("getname", "姓名");
@@ -104,4 +106,8 @@ public class ListActivity extends android.app.ListActivity {
 
     }
 
+    // 将获取的int转为真正的ip地址,参考的网上的，修改了下
+    private String intToIp(int i) {
+        return (i & 0xFF) + "." + ((i >> 8) & 0xFF) + "." + ((i >> 16) & 0xFF) + "." + ((i >> 24) & 0xFF);
+    }
 }

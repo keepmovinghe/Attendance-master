@@ -2,53 +2,40 @@ package com.keepmoving.he.attendance;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.Notification;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothServerSocket;
-import android.bluetooth.BluetoothSocket;
-import android.content.BroadcastReceiver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.net.Uri;
+import android.net.DhcpInfo;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.provider.Settings;
-import android.support.v4.content.LocalBroadcastManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.inputmethod.InputMethodManager;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.ListView;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
-import android.widget.Spinner;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
 public class MainActivity extends Activity {
 
@@ -57,18 +44,8 @@ public class MainActivity extends Activity {
     private EditText et1 = null;
     private EditText et2 = null;
 
-    public static final String PROTOCOL_SCHEME_RFCOMM = "btspp";
-
-    private ListView mListView;
-    private ArrayAdapter<String> mAdapter;
-    private List<String> msgList=new ArrayList<String>();
-    private BluetoothSocket socket = null;
-    private BluetoothDevice device = null;
-    private ReadThread mreadThread = null;
-    private BluetoothServerSocket mserverSocket = null;
-    private BluetoothAdapter mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-    private ServerThread startServerThread = null;
-    private ClientThread clientConnectThread = null;
+    public static final int PORT = 3358;
+    public static final int CALLBACK_PORT=3359;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -77,6 +54,64 @@ public class MainActivity extends Activity {
         init();
     }
 
+    void saveDate(String phone_ID, String link_flag, String name, String number, String clientIp){
+        Map<String,Object> returnMap = new HashMap<>();
+        // db实例
+        DatabaseHelper dbh = new DatabaseHelper(MainActivity.this,"SamG_Checkin");
+        SQLiteDatabase sdRead = dbh.getReadableDatabase();
+        // 查询是否已签到
+        Cursor cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "number=?", new String[]{number}, null, null, null);
+        if(cursor.getCount()>0){
+            // 已签到
+            //display("您已签到！");
+            //Toast.makeText(MainActivity.this,"您已签到！",Toast.LENGTH_SHORT).show();
+            cursor.close();
+            sdRead.close();
+            JSONObject jsonObject = new JSONObject();
+            try {
+                jsonObject.put("result","您已签到！");
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+            //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
+            return;
+        }
+        // 查询是否替签
+        cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "phone_ID=?", new String[]{phone_ID}, null, null, null);
+        if(cursor.getCount()>0){
+            // 该设备已签到
+            //display("该设备已签到！");
+            //Toast.makeText(MainActivity.this,"该设备已签到！",Toast.LENGTH_SHORT).show();
+            cursor.close();
+            sdRead.close();
+            JSONObject jsonObject = new JSONObject();
+            try {
+                jsonObject.put("result","该设备已签到！");
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+            //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
+            return;
+        }
+        // 保存数据
+        //DatabaseHelper dbh = new DatabaseHelper(MainActivity.this,"SamG_Checkin");
+        SQLiteDatabase sd = dbh.getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("phone_ID",phone_ID);
+        values.put("link_flag",String.valueOf(link_flag));
+        values.put("name", name);
+        values.put("number", number);
+        sd.insert("CheckinTable", null, values);
+        sd.close();
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("result","签到成功！");
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
+        return;
+    }
     private void init(){
         //做按钮跳转
         button = (Button)findViewById(R.id.button1);
@@ -109,50 +144,31 @@ public class MainActivity extends Activity {
                     // wifi ip
                     WifiManager wifiManager = (WifiManager)getSystemService(Context.WIFI_SERVICE);
                     WifiInfo wifiInfo = wifiManager.getConnectionInfo();
-                    int ipAddress = wifiInfo.getIpAddress();
-                    // db实例
-                    DatabaseHelper dbh = new DatabaseHelper(MainActivity.this,"SamG_Checkin");
-                    SQLiteDatabase sdRead = dbh.getReadableDatabase();
-                    // 查询是否已签到
-                    Cursor cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "number=?", new String[]{et2.getText().toString()}, null, null, null);
-                    if(cursor.getCount()>0){
-                        // 该设备已签到
-                        //dialog("您已签到！");
-                        Toast.makeText(MainActivity.this,"您已签到！",Toast.LENGTH_SHORT).show();
-                        cursor.close();
-                        sdRead.close();
-                        return;
-                    }
-                    // 查询是否替签
-                    cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "phone_ID=?", new String[]{deviceId}, null, null, null);
-                    if(cursor.getCount()>0){
-                        // 该设备已签到
-                        //dialog("该设备已签到！");
-                        Toast.makeText(MainActivity.this,"该设备已签到！",Toast.LENGTH_SHORT).show();
-                        cursor.close();
-                        sdRead.close();
-                        return;
-                    }
-
-                    // 保存数据
-                    //SQLiteDatabase sd = dbh.getWritableDatabase();
-                    ContentValues values = new ContentValues();
-                    values.put("phone_ID",deviceId);
-                    values.put("link_flag",String.valueOf(ipAddress));
-                    values.put("name", et1.getText().toString());
-                    values.put("number", et2.getText().toString());
-                    //sd.insert("CheckinTable", null, values);
-                    //sd.close();
+                    String clientIp = intToIp(wifiInfo.getIpAddress());
+                    String serverIp = intToIp(wifiManager.getDhcpInfo().serverAddress);
+                    String name = et1.getText().toString();
+                    String number = et2.getText().toString();
+                    // 保存数据到本地
+                    //saveDate(deviceId,serverIp,name,number);
 
                     JSONObject jsonObject=new JSONObject();
                     try {
                         jsonObject.put("phone_ID", deviceId);
-                        jsonObject.put("link_flag", String.valueOf(ipAddress));
-                        jsonObject.put("name", et1.getText().toString());
-                        jsonObject.put("number", et2.getText().toString());
+                        jsonObject.put("link_flag", serverIp);
+                        jsonObject.put("name", name);
+                        jsonObject.put("number", number);
+                        jsonObject.put("clientIp", clientIp);
                     }catch (JSONException e){
                         e.printStackTrace();
                     }
+
+                    WifiManager wifiManage = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+                    DhcpInfo info = wifiManage.getDhcpInfo();
+                    WifiInfo wifiinfo = wifiManage.getConnectionInfo();
+                    String ip = intToIp(wifiinfo.getIpAddress());
+                    String serverAddress = intToIp(info.serverAddress);
+                    new Sender(serverAddress,PORT,jsonObject).start();
+                    Log.w("robin", "ip:" + ip + "serverAddress:" + serverAddress + info);
 
                     //发送广播
                     //sendBroadcas(values);
@@ -178,28 +194,202 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 启动监听端口
+        Receiver service = new Receiver();
+        service.start();
 
+        // 监听回调端口
+        new CallBackReceiver().start();
     }
 
-    class Sender extends Thread {
-        DisplayMesage console;
-        String serverIp;
-        ITransferResult transferResult;
+    // 将获取的int转为真正的ip地址,参考的网上的，修改了下
+    private String intToIp(int i) {
+        return (i & 0xFF) + "." + ((i >> 8) & 0xFF) + "." + ((i >> 16) & 0xFF) + "." + ((i >> 24) & 0xFF);
+    }
 
-        Sender(String serverAddress, DisplayMesage console, ITransferResult transferResult) {
+    volatile Socket   mSocket;
+    volatile Socket   callBackSocket;
+    ServerSocket server;
+    ServerSocket callBackServer;
+    private Handler mHandler=new Handler(){
+
+        @Override
+        public void handleMessage(Message msg) {
+            // TODO Auto-generated method stub
+            super.handleMessage(msg);
+
+            if(msg.what==0x02){
+                new Thread(new  Runnable() {
+                    @Override
+                    public void run() {
+
+                        try {
+                            Log.i("客户端连接", "读取客户端发来的数据");
+                            InputStream ins=mSocket.getInputStream();
+                            ByteArrayOutputStream os=new ByteArrayOutputStream();
+                            int len=0;
+                            byte[] buffer=new byte[1024];
+                            while((len=ins.read(buffer))!=-1){
+                                os.write(buffer);
+                            }
+                            //第一步，生成Json字符串格式的JSON对象
+                            JSONObject jsonObject=new JSONObject(os.toString());
+                            //第二步，从JSON对象中取值如果JSON 对象较多，可以用json数组
+                            String phone_ID=jsonObject.getString("phone_ID");
+                            String link_flag=jsonObject.getString("link_flag");
+                            String name=jsonObject.getString("name");
+                            String number=jsonObject.getString("number");
+                            String clientIp = jsonObject.getString("clientIp");
+                            // 保存数据
+                            saveDate(phone_ID,link_flag,name,number,clientIp);
+                            new Sender(clientIp,CALLBACK_PORT,jsonObject);
+                            System.out.println(name+number+clientIp);
+                            //Looper.prepare();
+                            //Message message=Message.obtain();
+                            //message.what=0x02;
+                            //message.obj=sb.toString();
+                            //mHandler.sendMessage(message);
+                            //Looper.loop();
+
+                        } catch (Exception e) {
+                            // TODO Auto-generated catch block
+                            e.printStackTrace();
+                        }finally{
+
+                            if(mSocket!=null){
+                                try {
+                                    mSocket.close();
+                                    mSocket=null;
+                                } catch (IOException e) {
+                                    // TODO Auto-generated catch block
+                                    e.printStackTrace();
+                                }
+
+                            }
+                        }
+
+                    }
+                }).start();
+            }else if (msg.what==000000){
+                // 回调
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try{
+                            InputStream ins=callBackSocket.getInputStream();
+                            ByteArrayOutputStream os=new ByteArrayOutputStream();
+                            int len=0;
+                            byte[] buffer=new byte[1024];
+                            while((len=ins.read(buffer))!=-1){
+                                os.write(buffer);
+                            }
+                            //第一步，生成Json字符串格式的JSON对象
+                            JSONObject jsonObject=new JSONObject(os.toString());
+                            //第二步，从JSON对象中取值如果JSON 对象较多，可以用json数组
+                            String result=jsonObject.getString("result");
+                            /*
+                            mHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    //主线程
+
+                                }
+                            });
+                            */
+                            //display(result);
+                            System.out.println(result);
+                        }catch (Exception e){
+                            e.printStackTrace();
+                        }finally{
+
+                            if(callBackSocket!=null){
+                                try {
+                                    callBackSocket.close();
+                                    callBackSocket=null;
+                                } catch (IOException e) {
+                                    // TODO Auto-generated catch block
+                                    e.printStackTrace();
+                                }
+
+                            }
+                        }
+                    }
+                });
+                //display("");
+            }
+        }
+    };
+
+    /**
+     * 接收信息
+     */
+    class Receiver extends Thread {
+        Receiver(){
+            super();
+        }
+
+        public void run() {
+            try {
+                server = new ServerSocket(PORT);
+                while (true) {
+                    //Looper.prepare();
+                    Message message = Message.obtain();
+                    mSocket = server.accept();
+                    message.what = 0x02;
+                    mHandler.sendMessage(message);
+                    //Looper.loop();
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    class CallBackReceiver extends Thread {
+
+        CallBackReceiver(){
+            super();
+        }
+        public void run() {
+            try {
+                callBackServer = new ServerSocket(CALLBACK_PORT);
+                while (true) {
+                    //Looper.prepare();
+                    Message message = Message.obtain();
+                    callBackSocket = callBackServer.accept();
+                    message.what = 000000;
+                    mHandler.sendMessage(message);
+                    //Looper.loop();
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * 发送socket信息
+     */
+    class Sender extends Thread {
+        String serverIp;
+        int port;
+        JSONObject jsonObject=null;
+
+        Sender(String serverAddress,int port,JSONObject jsonObject) {
             super();
             serverIp = serverAddress;
-            this.console = console;
-            this.transferResult = transferResult;
+            this.port= port;
+            this.jsonObject=jsonObject;
         }
 
         public void run() {
             Socket sock = null;
-            PrintWriter out;
             try {
 
                 // 声明sock，其中参数为服务端的IP地址与自定义端口
-                sock = new Socket(serverIp, 3358);
+                sock = new Socket(serverIp, port);
                 Log.w("robin", "I am try to writer" + sock);
             } catch (UnknownHostException e) {
                 // TODO Auto-generated catch block
@@ -208,40 +398,15 @@ public class MainActivity extends Activity {
                 // TODO Auto-generated catch block
                 e.printStackTrace();
             }
-            char data[] = new char[1024 * 10];
-            for (int i = 0; i < data.length; i++) {
-                data[i] = (char) i;
-            }
+
             try {
                 if (sock != null) {
                     // 声明输出流out，向服务端输出“Output Message！！”
-                    final String msg = "Hello,this is robin!!";
-                    Log.w("robin", "try to writer");
-                    out = new PrintWriter(sock.getOutputStream(), true);
-                    StringBuffer strBuffer = new StringBuffer();
-                    strBuffer.append(msg);
-                    String str = msg;
-                    for (int i = 0; i < 1024; i++) {
-                        if (i != 0) {
-                            str = msg + System.currentTimeMillis() + "|";
-                            out.write(data);
-                        }
-
-                        out.println(str);
-                        Log.w("robin", str);
-                        if (i == 0) {
-                            console.displayMesage("send message....");
-                        } else if (i % 100 == 0) {
-                            console.displayMesage("send message " + i + " success!");
-                        }
-                        if (strBuffer.length() > 1024) {
-                            strBuffer.delete(0, strBuffer.length());
-                        }
-                    }
-                    out.println(Constant.END);
+                    OutputStream out = sock.getOutputStream();
+                    out.write(jsonObject.toString().getBytes());
                     out.flush();
+                    sock.shutdownOutput();
                 }
-                transferResult.onResult(1, 1);
             } catch (IOException e) {
                 // TODO Auto-generated catch block
                 e.printStackTrace();
@@ -293,7 +458,7 @@ public class MainActivity extends Activity {
 
     //Toast数据
     private void display(String msg){
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show();
     }
     //做文本输入对话框
     private void dialog(String msg){
