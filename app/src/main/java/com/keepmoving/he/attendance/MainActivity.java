@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SyncStatusObserver;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.DhcpInfo;
@@ -12,6 +13,7 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.telephony.TelephonyManager;
 import android.util.Log;
@@ -20,16 +22,23 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.net.ConnectException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -43,9 +52,7 @@ public class MainActivity extends Activity {
     private Button buttonList = null;
     private EditText et1 = null;
     private EditText et2 = null;
-
     public static final int PORT = 3358;
-    public static final int CALLBACK_PORT=3359;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -54,8 +61,8 @@ public class MainActivity extends Activity {
         init();
     }
 
-    void saveDate(String phone_ID, String link_flag, String name, String number, String clientIp){
-        Map<String,Object> returnMap = new HashMap<>();
+    JSONObject saveDate(String phone_ID, String link_flag, String name, String number, String clientIp){
+        JSONObject jsonObject = new JSONObject();
         // db实例
         DatabaseHelper dbh = new DatabaseHelper(MainActivity.this,"SamG_Checkin");
         SQLiteDatabase sdRead = dbh.getReadableDatabase();
@@ -63,38 +70,29 @@ public class MainActivity extends Activity {
         Cursor cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "number=?", new String[]{number}, null, null, null);
         if(cursor.getCount()>0){
             // 已签到
-            //display("您已签到！");
-            //Toast.makeText(MainActivity.this,"您已签到！",Toast.LENGTH_SHORT).show();
             cursor.close();
             sdRead.close();
-            JSONObject jsonObject = new JSONObject();
             try {
                 jsonObject.put("result","您已签到！");
             } catch (JSONException e) {
                 e.printStackTrace();
             }
-            //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
-            return;
+            return jsonObject;
         }
         // 查询是否替签
         cursor=sdRead.query("CheckinTable", new String[]{"name","number"}, "phone_ID=?", new String[]{phone_ID}, null, null, null);
         if(cursor.getCount()>0){
             // 该设备已签到
-            //display("该设备已签到！");
-            //Toast.makeText(MainActivity.this,"该设备已签到！",Toast.LENGTH_SHORT).show();
             cursor.close();
             sdRead.close();
-            JSONObject jsonObject = new JSONObject();
             try {
                 jsonObject.put("result","该设备已签到！");
             } catch (JSONException e) {
                 e.printStackTrace();
             }
-            //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
-            return;
+            return jsonObject;
         }
         // 保存数据
-        //DatabaseHelper dbh = new DatabaseHelper(MainActivity.this,"SamG_Checkin");
         SQLiteDatabase sd = dbh.getWritableDatabase();
         ContentValues values = new ContentValues();
         values.put("phone_ID",phone_ID);
@@ -103,14 +101,12 @@ public class MainActivity extends Activity {
         values.put("number", number);
         sd.insert("CheckinTable", null, values);
         sd.close();
-        JSONObject jsonObject = new JSONObject();
         try {
             jsonObject.put("result","签到成功！");
         } catch (JSONException e) {
             e.printStackTrace();
         }
-        //new Sender(clientIp,CALLBACK_PORT,jsonObject).start();
-        return;
+        return jsonObject;
     }
     private void init(){
         //做按钮跳转
@@ -172,9 +168,6 @@ public class MainActivity extends Activity {
 
                     //发送广播
                     //sendBroadcas(values);
-
-                    //Toast.makeText(MainActivity.this,"签到成功！",Toast.LENGTH_SHORT).show();
-                    //display("签到成功！");
                 }
             }
         });
@@ -197,9 +190,6 @@ public class MainActivity extends Activity {
         // 启动监听端口
         Receiver service = new Receiver();
         service.start();
-
-        // 监听回调端口
-        new CallBackReceiver().start();
     }
 
     // 将获取的int转为真正的ip地址,参考的网上的，修改了下
@@ -208,9 +198,8 @@ public class MainActivity extends Activity {
     }
 
     volatile Socket   mSocket;
-    volatile Socket   callBackSocket;
     ServerSocket server;
-    ServerSocket callBackServer;
+    volatile String callbackResult="";
     private Handler mHandler=new Handler(){
 
         @Override
@@ -241,82 +230,31 @@ public class MainActivity extends Activity {
                             String number=jsonObject.getString("number");
                             String clientIp = jsonObject.getString("clientIp");
                             // 保存数据
-                            saveDate(phone_ID,link_flag,name,number,clientIp);
-                            new Sender(clientIp,CALLBACK_PORT,jsonObject);
-                            System.out.println(name+number+clientIp);
-                            //Looper.prepare();
-                            //Message message=Message.obtain();
-                            //message.what=0x02;
-                            //message.obj=sb.toString();
-                            //mHandler.sendMessage(message);
-                            //Looper.loop();
-
+                            jsonObject = saveDate(phone_ID,link_flag,name,number,clientIp);
+                            //System.out.println("111111"+name+number+clientIp);
+                            callbackResult = jsonObject.getString("result");
                         } catch (Exception e) {
-                            // TODO Auto-generated catch block
                             e.printStackTrace();
                         }finally{
-
                             if(mSocket!=null){
                                 try {
                                     mSocket.close();
                                     mSocket=null;
                                 } catch (IOException e) {
-                                    // TODO Auto-generated catch block
                                     e.printStackTrace();
                                 }
-
                             }
                         }
-
                     }
                 }).start();
             }else if (msg.what==000000){
                 // 回调
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        try{
-                            InputStream ins=callBackSocket.getInputStream();
-                            ByteArrayOutputStream os=new ByteArrayOutputStream();
-                            int len=0;
-                            byte[] buffer=new byte[1024];
-                            while((len=ins.read(buffer))!=-1){
-                                os.write(buffer);
-                            }
-                            //第一步，生成Json字符串格式的JSON对象
-                            JSONObject jsonObject=new JSONObject(os.toString());
-                            //第二步，从JSON对象中取值如果JSON 对象较多，可以用json数组
-                            String result=jsonObject.getString("result");
-                            /*
-                            mHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    //主线程
-
-                                }
-                            });
-                            */
-                            //display(result);
-                            System.out.println(result);
-                        }catch (Exception e){
-                            e.printStackTrace();
-                        }finally{
-
-                            if(callBackSocket!=null){
-                                try {
-                                    callBackSocket.close();
-                                    callBackSocket=null;
-                                } catch (IOException e) {
-                                    // TODO Auto-generated catch block
-                                    e.printStackTrace();
-                                }
-
-                            }
-                        }
-                    }
-                });
-                //display("");
+                //System.out.println("msg.obj---->"+msg.obj);
+                if(!"".equals(msg.obj)) {
+                    display((String) msg.obj);
+                }
             }
+            //System.out.println("333333333"+callbackResult);
         }
     };
 
@@ -338,29 +276,10 @@ public class MainActivity extends Activity {
                     message.what = 0x02;
                     mHandler.sendMessage(message);
                     //Looper.loop();
-                }
-
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    class CallBackReceiver extends Thread {
-
-        CallBackReceiver(){
-            super();
-        }
-        public void run() {
-            try {
-                callBackServer = new ServerSocket(CALLBACK_PORT);
-                while (true) {
-                    //Looper.prepare();
-                    Message message = Message.obtain();
-                    callBackSocket = callBackServer.accept();
-                    message.what = 000000;
-                    mHandler.sendMessage(message);
-                    //Looper.loop();
+                    //回复消息给客户端
+                    OutputStream out = mSocket.getOutputStream();
+                    out.write(callbackResult.getBytes());
+                    out.flush();
                 }
 
             } catch (Exception e) {
@@ -390,16 +309,8 @@ public class MainActivity extends Activity {
 
                 // 声明sock，其中参数为服务端的IP地址与自定义端口
                 sock = new Socket(serverIp, port);
-                Log.w("robin", "I am try to writer" + sock);
-            } catch (UnknownHostException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            } catch (IOException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            }
+                Log.w("robin", "I am try to writer"+sock);
 
-            try {
                 if (sock != null) {
                     // 声明输出流out，向服务端输出“Output Message！！”
                     OutputStream out = sock.getOutputStream();
@@ -407,17 +318,60 @@ public class MainActivity extends Activity {
                     out.flush();
                     sock.shutdownOutput();
                 }
-            } catch (IOException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
-            }
-
-            try {
-                if (sock != null) {
-                    sock.close();
+                sleep(500);
+                InputStream ins=sock.getInputStream();
+                ByteArrayOutputStream os=new ByteArrayOutputStream();
+                int len=0;
+                byte[] buffer=new byte[1024];
+                while((len=ins.read(buffer))!=-1){
+                    os.write(buffer);
                 }
-            } catch (Exception ex) {
-                ex.printStackTrace();
+                //System.out.println("555555"+os.toString());
+                callbackResult = os.toString().trim();
+
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Message message = Message.obtain();
+                        message.what = 000000;
+                        message.obj=callbackResult;
+                        mHandler.sendMessage(message);
+                    }
+                }).start();
+            } catch (UnknownHostException e) {
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Message message = Message.obtain();
+                        message.what = 000000;
+                        message.obj="签到失败，无法连接到设备！";
+                        mHandler.sendMessage(message);
+                    }
+                }).start();
+                e.printStackTrace();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ConnectException e){
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Message message = Message.obtain();
+                        message.what = 000000;
+                        message.obj="签到失败，设备没开启接收！";
+                        mHandler.sendMessage(message);
+                    }
+                }).start();
+                e.printStackTrace();
+            } catch(IOException e) {
+                e.printStackTrace();
+            }finally {
+                try {
+                    if (sock != null) {
+                        sock.close();
+                    }
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
             }
         }
     }
